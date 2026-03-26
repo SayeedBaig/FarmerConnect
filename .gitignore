@@ -40,9 +40,15 @@ lerna-debug.log*
 *.bin
 *.gguf
 
-# AI model folders
-models/
-ai_models/
+# Keep backend source/model folders tracked
+!kisaan-backend/models/
+!kisaan-backend/models/**
+!kisaan-backend/ai_models/
+!kisaan-backend/ai_models/**
+
+# But still ignore generated Python cache inside them
+kisaan-backend/ai_models/**/__pycache__/
+kisaan-backend/ai_models/**/*.pyc
 
 # Upload folders
 uploads/

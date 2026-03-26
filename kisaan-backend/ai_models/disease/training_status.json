@@ -1,0 +1,7 @@
+{
+    "status": "complete",
+    "message": "CNN model loaded successfully",
+    "accuracy": null,
+    "current_epoch": null,
+    "total_epochs": null
+}

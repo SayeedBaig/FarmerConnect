@@ -40,10 +40,6 @@ lerna-debug.log*
 *.bin
 *.gguf
 
-# AI model folders
-models/
-ai_models/
-
 # Upload folders
 uploads/
 
