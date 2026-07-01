@@ -112,58 +112,115 @@ router.post('/chat', async (req, res) => {
             .limit(5)
             .lean();
 
-        const messages = [
-            {
-                role: 'system',
-                content: `You are Kisaan Mitra AI, a helpful agricultural expert for Indian farmers. 
-                          Reply concisely and practically. 
-                          IMPORTANT: Respond in this language: "${langPref}".`
-            }
-        ];
+        // Build Gemini prompt
+        const systemPrompt = `You are Kisaan Mitra AI, a helpful agricultural expert for Indian farmers.
+Reply concisely and practically. 
+IMPORTANT: Respond in this language: "${langPref}".`;
 
-        // Add history in chronological order (oldest first)
+        // Build conversation history text
+        let conversationHistory = '';
         for (const msg of history.reverse()) {
             if (msg.message !== message) {
-                messages.push({
-                    role:    msg.is_bot_reply ? 'assistant' : 'user',
-                    content: msg.message
-                });
+                const role = msg.is_bot_reply ? 'Assistant' : 'User';
+                conversationHistory += `${role}: ${msg.message}\n`;
             }
         }
 
-        messages.push({ role: 'user', content: message });
+        const fullPrompt = `${systemPrompt}\n\n${conversationHistory}User: ${message}\nAssistant:`;
 
-        // Call FastAPI RAG service
+        // Call Gemini API directly
         let botReply = "I'm sorry, I couldn't process your request.";
 
         try {
-            const controller = new AbortController();
-            const timeoutId  = setTimeout(() => controller.abort(), 120000);
-
-            const response = await fetch(`${LLM_SERVICE_URL}/chat`, {
-                method:  'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify({ messages, language: langPref }),
-                signal:  controller.signal
-            });
-            clearTimeout(timeoutId);
-
-            if (!response.ok) {
-                const errBody = await response.text();
-                throw new Error(`LLM service error ${response.status}: ${errBody}`);
+            const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+            if (!GEMINI_API_KEY || GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY_HERE') {
+                throw new Error('GEMINI_API_KEY is not set in .env');
             }
 
-            const data = await response.json();
-            if (data?.reply) botReply = data.reply;
+            // Try models in order — each has its own quota bucket
+            const MODELS = [
+                'gemini-1.5-flash',
+                'gemini-1.5-flash-8b',
+                'gemini-1.0-pro',
+                'gemini-2.0-flash'
+            ];
+
+            let lastError = null;
+            for (const model of MODELS) {
+                try {
+                    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+
+                    const controller = new AbortController();
+                    const timeoutId  = setTimeout(() => controller.abort(), 30000);
+
+                    const response = await fetch(geminiUrl, {
+                        method:  'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body:    JSON.stringify({
+                            contents: [{ parts: [{ text: fullPrompt }] }],
+                            generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
+                        }),
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeoutId);
+
+                    if (response.status === 429 || response.status === 403) {
+                        // Quota or key issue — try next model
+                        const errBody = await response.text();
+                        console.warn(`[Chat] Model ${model} unavailable (${response.status}), trying next...`);
+                        lastError = new Error(`${model} error ${response.status}: ${errBody}`);
+                        continue;
+                    }
+
+                    if (!response.ok) {
+                        const errBody = await response.text();
+                        throw new Error(`Gemini API error ${response.status}: ${errBody}`);
+                    }
+
+                    const data = await response.json();
+                    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (text) {
+                        botReply = text.trim();
+                        console.log(`[Chat] Replied using model: ${model}`);
+                    }
+                    lastError = null;
+                    break; // success — stop trying
+
+                } catch (modelErr) {
+                    if (modelErr.name === 'AbortError') throw modelErr;
+                    lastError = modelErr;
+                    console.warn(`[Chat] Model ${model} failed:`, modelErr.message);
+                }
+            }
+
+            // If all models failed, use smart rule-based fallback
+            if (lastError) {
+                console.warn('[Chat] All Gemini models failed. Using rule-based fallback.');
+                const q = message.toLowerCase();
+                if (q.includes('fertilizer') || q.includes('khad') || q.includes('urea')) {
+                    botReply = 'For fertilizer advice, get a soil health card first. Generally: Urea for nitrogen, DAP for phosphorus. Apply based on your crop stage.';
+                } else if (q.includes('pest') || q.includes('disease') || q.includes('insect')) {
+                    botReply = 'For pest control, use integrated pest management (IPM). Contact your local Krishi Vigyan Kendra (KVK) for region-specific advice.';
+                } else if (q.includes('water') || q.includes('irrigation') || q.includes('sinchhai')) {
+                    botReply = 'Drip irrigation saves 30-50% water. Irrigate in morning or evening to reduce evaporation. Check soil moisture before watering.';
+                } else if (q.includes('weather') || q.includes('rain') || q.includes('monsoon')) {
+                    botReply = 'Check IMD (mausam.imd.gov.in) for weather forecasts. Plan sowing and harvesting around monsoon patterns in your region.';
+                } else if (q.includes('price') || q.includes('market') || q.includes('mandi')) {
+                    botReply = 'Check the Market Prices tab for live mandi rates. You can also check eNAM (enam.gov.in) for national market prices.';
+                } else {
+                    botReply = 'I\'m your Kisaan Mitra AI assistant. I can help with fertilizer advice, pest control, irrigation, weather, and market prices. What would you like to know?';
+                }
+            }
 
         } catch (err) {
-            console.error('[Chat] LLM Service Error:', err.message);
+            console.error('[Chat] Gemini API Error:', err.message);
             const errMsg = err.name === 'AbortError'
-                ? '⏳ The AI is still loading. Please wait 30 seconds and try again.'
-                : '⚠️ AI service error. Make sure the FastAPI service is running on port 8000.';
+                ? '⏳ The AI is taking too long. Please try again.'
+                : `⚠️ AI service error: ${err.message}`;
             await Chat.create({ user_id: user._id, message: errMsg, is_bot_reply: true });
             return res.status(503).json({ error: errMsg });
         }
+
 
         // Save bot reply
         await Chat.create({ user_id: user._id, message: botReply, is_bot_reply: true });

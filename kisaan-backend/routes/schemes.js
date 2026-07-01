@@ -71,51 +71,8 @@ const FALLBACK_SCHEMES = [
 ];
 
 // =============================================
-// FETCH FROM MYSCHEME API (Government of India)
-// =============================================
-async function fetchFromMyScheme(crop) {
-    try {
-        // MyScheme.gov.in search API
-        const query = crop ? `agriculture ${crop} farmer` : 'agriculture farmer';
-        const url = `https://api.myscheme.gov.in/search/v4/schemes?lang=en&q=${encodeURIComponent(query)}&keyword=${encodeURIComponent(query)}&beneficiary=farmer&limit=20`;
-
-        const response = await fetch(url, {
-            headers: {
-                'Accept': 'application/json',
-                'User-Agent': 'KisaanMitra/1.0'
-            },
-            signal: AbortSignal.timeout(8000) // 8 second timeout
-        });
-
-        if (!response.ok) throw new Error(`MyScheme API error: ${response.status}`);
-
-        const data = await response.json();
-
-        if (!data?.data?.schemes?.length) return null;
-
-        // Map to our format
-        return data.data.schemes.map((scheme, index) => ({
-            id: scheme.schemeId || index + 1,
-            title: scheme.schemeName || scheme.title || 'Government Scheme',
-            description: scheme.briefDescription || scheme.description || 'Agricultural support scheme.',
-            tags: [
-                ...(scheme.tags || []),
-                ...(scheme.beneficiaries || []),
-                'Government'
-            ].filter(Boolean).slice(0, 5),
-            link: scheme.schemeUrl || `https://myscheme.gov.in/schemes/${scheme.schemeSlug || ''}`,
-            ministry: scheme.nodeName || '',
-            state: scheme.state || 'Central'
-        }));
-
-    } catch (err) {
-        console.error('[Schemes] MyScheme API failed:', err.message);
-        return null;
-    }
-}
-
-// =============================================
-// FETCH FROM DATA.GOV.IN (backup source)
+// FETCH FROM DATA.GOV.IN (live source)
+// MyScheme API requires auth (returns 401) — skipped
 // =============================================
 async function fetchFromDataGov() {
     try {
@@ -161,25 +118,19 @@ router.get('/', async (req, res) => {
     try {
         let schemes = null;
 
-        // Check cache first (only for non-crop-specific requests)
-        if (!crop && cachedSchemes && cacheTimestamp && (Date.now() - cacheTimestamp < CACHE_TTL_MS)) {
+        // Check cache first
+        if (cachedSchemes && cacheTimestamp && (Date.now() - cacheTimestamp < CACHE_TTL_MS)) {
             console.log('[Schemes] Serving from cache');
             schemes = cachedSchemes;
         }
 
-        // Try fetching live data
+        // Try fetching live data from Data.gov.in
         if (!schemes) {
             console.log('[Schemes] Fetching live data...');
-
-            // Try MyScheme first, then Data.gov.in as backup
-            schemes = await fetchFromMyScheme(crop);
-
-            if (!schemes) {
-                schemes = await fetchFromDataGov();
-            }
+            schemes = await fetchFromDataGov();
 
             // Cache successful response
-            if (schemes && !crop) {
+            if (schemes) {
                 cachedSchemes = schemes;
                 cacheTimestamp = Date.now();
                 console.log(`[Schemes] Cached ${schemes.length} schemes`);

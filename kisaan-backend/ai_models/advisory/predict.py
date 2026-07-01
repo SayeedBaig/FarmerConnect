@@ -6,7 +6,7 @@ import pickle
 # Use absolute paths based on script location so it works when spawned by Express
 _DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(_DIR, "models", "classifier.pkl")
-ENCODER_PATH = os.path.join(_DIR, "models", "fertilizer_encoder.pkl")
+ENCODER_PATH = os.path.join(_DIR, "models", "fertilizer_encoder.pkl")  # saved by train_model.py
 
 with open(MODEL_PATH, "rb") as f:
     model = pickle.load(f)
